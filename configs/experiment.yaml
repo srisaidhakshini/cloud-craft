@@ -1,0 +1,4 @@
+# Full sweep: 4 conditions x 2 splits x 3 seeds = 24 runs (PRD Experiment design).
+# Everything not set here comes from base.yaml.
+training:
+  rounds: 30
