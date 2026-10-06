@@ -1,0 +1,34 @@
+# Five clients, one profile each (FR-14). Point them at the server:
+#   SERVER_ADDRESS=<ec2-elastic-ip>:8080 SPLIT=dirichlet SEED=0 docker compose up --build
+# Split indices must exist in ./data (run `python -m cloudcraft.prepare_data` first).
+x-client: &client
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  volumes:
+    - ./data:/app/data
+  environment: &env
+    SERVER_ADDRESS: ${SERVER_ADDRESS:-host.docker.internal:8080}
+    SPLIT: ${SPLIT:-iid}
+    SEED: ${SEED:-0}
+    CONFIG: ${CONFIG:-configs/base.yaml}
+    DATA_DIR: /app/data
+  restart: "no"
+
+services:
+  client1:
+    <<: *client
+    environment: {<<: *env, CLIENT_ID: "1", PROFILE: fast}
+  client2:
+    <<: *client
+    environment: {<<: *env, CLIENT_ID: "2", PROFILE: medium}
+  client3:
+    <<: *client
+    environment: {<<: *env, CLIENT_ID: "3", PROFILE: slow}
+  client4:
+    <<: *client
+    cap_add: [NET_ADMIN]
+    environment: {<<: *env, CLIENT_ID: "4", PROFILE: high_latency, NETEM_DELAY: "${NETEM_DELAY:-}"}
+  client5:
+    <<: *client
+    environment: {<<: *env, CLIENT_ID: "5", PROFILE: unreliable}
