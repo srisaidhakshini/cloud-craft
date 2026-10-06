@@ -1,0 +1,9 @@
+# Pinned versions (NFR: reproducibility). Flower docs for 1.13.x apply.
+flwr==1.13.1
+torch==2.5.1
+torchvision==0.20.1
+numpy==1.26.4
+pandas==2.2.3
+matplotlib==3.9.2
+PyYAML==6.0.2
+pytest==8.3.3

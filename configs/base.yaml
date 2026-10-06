@@ -1,0 +1,49 @@
+# Base config. Every tunable lives here (FR-13); experiment configs override it.
+training:
+  rounds: 20
+  local_epochs: 1
+  batch_size: 64
+  lr: 0.01
+  momentum: 0.9
+  round_timeout: 30        # seconds; bounds every round (FR-9)
+  failure_mode: drop       # drop = client returns a failure; timeout = client hangs past round_timeout
+
+data:
+  samples_per_client: null # cap per client for quick smoke runs
+  test_samples: null       # cap on the global test set for quick smoke runs
+  dirichlet_alpha: 0.5
+
+# Client id -> profile (FR-2). Profile delays can be overridden under `profiles`.
+clients:
+  "1": fast
+  "2": medium
+  "3": slow
+  "4": high_latency
+  "5": unreliable
+
+profiles: {}
+
+scoring:
+  w_time: 0.4
+  w_latency: 0.3
+  w_reliability: 0.3
+  ema_beta: 0.3
+
+selection:
+  k: 3
+  epsilon: 0.1
+  staleness_bonus: 0.0
+
+# The four experiment conditions (PRD Experiment design).
+conditions:
+  A: {mode: all}
+  B: {mode: random}
+  C: {mode: perf, epsilon: 0.0}
+  D: {mode: perf_explore}
+
+experiment:
+  conditions: [A, B, C, D]
+  splits: [iid, dirichlet]
+  seeds: [0, 1, 2]
+  target_accuracy: 0.97
+  server_port: 18080   # local runner only; 8080 is often taken
