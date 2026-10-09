@@ -24,9 +24,9 @@ clients:
 profiles: {}
 
 scoring:
-  w_time: 0.4
-  w_latency: 0.3
-  w_reliability: 0.3
+  w_time: 0.3
+  w_latency: 0.2
+  w_reliability: 0.5
   ema_beta: 0.3
 
 selection:
