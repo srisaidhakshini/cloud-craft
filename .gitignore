@@ -6,3 +6,4 @@ results/
 analysis/output/
 .pytest_cache/
 results_smoke/
+.dockerignore

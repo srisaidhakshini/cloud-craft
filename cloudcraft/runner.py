@@ -1,8 +1,7 @@
 """Experiment runner (FR-11): every condition x split x seed from a YAML config.
 
 Locally it starts the server and the 5 clients as subprocesses for each run.
-Complete runs (meta.json says complete) are skipped, so an interrupted sweep
-can be resumed. Use --force to redo them.
+Every run executes each time; pass --resume to skip runs whose meta.json says complete.
 
     python -m cloudcraft.runner --config configs/experiment.yaml
 """
@@ -83,7 +82,7 @@ def main() -> None:
     p.add_argument("--config", default="configs/experiment.yaml")
     p.add_argument("--results-dir", default="results")
     p.add_argument("--data-dir", default="data")
-    p.add_argument("--force", action="store_true", help="redo runs that already completed")
+    p.add_argument("--resume", action="store_true", help="skip runs that already completed")
     p.add_argument("--run-timeout", type=float, default=3600.0, help="seconds per run")
     args = p.parse_args()
 
@@ -93,7 +92,7 @@ def main() -> None:
     failed = []
     for i, (split, seed, cond) in enumerate(combos, 1):
         run_id = f"{cond}_{split}_seed{seed}"
-        if not args.force and _is_complete(Path(args.results_dir) / run_id):
+        if args.resume and _is_complete(Path(args.results_dir) / run_id):
             print(f"[{i}/{len(combos)}] {run_id}: already complete, skipping", flush=True)
             continue
         print(f"[{i}/{len(combos)}] {run_id}: running", flush=True)

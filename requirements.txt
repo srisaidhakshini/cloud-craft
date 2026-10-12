@@ -1,8 +1,12 @@
-# Pinned versions (NFR: reproducibility). Flower docs for 1.13.x apply.
-flwr==1.13.1
-torch==2.5.1
-torchvision==0.20.1
-numpy==1.26.4
+# Pinned versions (NFR: reproducibility). Python 3.13.
+# Install with: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+flwr==1.39.0
+grpcio==1.84.0
+grpcio-health-checking==1.81.1
+protobuf==6.33.6
+numpy==2.5.3
+torch==2.6.0
+torchvision==0.21.0
 pandas==2.2.3
 matplotlib==3.9.2
 PyYAML==6.0.2
