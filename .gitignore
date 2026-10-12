@@ -7,3 +7,5 @@ analysis/output/
 .pytest_cache/
 results_smoke/
 .dockerignore
+results_ec2/
+analysis/output_ec2/

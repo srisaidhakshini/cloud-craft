@@ -7,6 +7,7 @@ Every run executes each time; pass --resume to skip runs whose meta.json says co
 """
 from __future__ import annotations
 
+import os
 import argparse
 import itertools
 import json
@@ -20,12 +21,12 @@ from cloudcraft import data as data_mod
 from cloudcraft.config import load_config
 
 
-def _wait_for_port(port: int, timeout: float = 60.0) -> bool:
+def _wait_for_port(port: int, timeout: float = 60.0, host: str = "127.0.0.1") -> bool:
     end = time.time() + timeout
     while time.time() < end:
         with socket.socket() as s:
             s.settimeout(0.5)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
+            if s.connect_ex((host, port)) == 0:
                 return True
         time.sleep(0.3)
     return False
@@ -76,6 +77,35 @@ def run_one(cfg_path, cfg, condition, split, seed, results_dir, data_dir, port, 
                 proc.kill()
     return _is_complete(run_dir)
 
+def run_one_remote(cfg_path, condition, split, seed, results_dir, host, key, remote_dir, run_timeout) -> bool:
+    run_id = f"{condition}_{split}_seed{seed}"
+    run_dir = Path(results_dir) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "meta.json").unlink(missing_ok=True)
+    port = 8080
+    ssh = ["ssh", "-i", key, "-o", "StrictHostKeyChecking=accept-new", f"ubuntu@{host}"]
+    server_cmd = (
+        f"cd {remote_dir} && sudo rm -rf results/{run_id} && "
+        f"docker run --rm -p {port}:{port} -v $PWD/data:/app/data -v $PWD/results:/app/results cloudcraft "
+        f"python -m cloudcraft.server --config {cfg_path} --condition {condition} "
+        f"--split {split} --seed {seed} --address 0.0.0.0:{port}"
+    )
+    server = subprocess.Popen(ssh + [server_cmd], stdout=open(run_dir / "server.log", "w"), stderr=subprocess.STDOUT)
+    env = {**os.environ, "SERVER_ADDRESS": f"{host}:{port}", "CONFIG": cfg_path, "SPLIT": split, "SEED": str(seed)}
+    try:
+        if not _wait_for_port(port, timeout=120, host=host):
+            raise RuntimeError("remote server did not start listening")
+        subprocess.run(["docker", "compose", "up"], env=env, timeout=run_timeout,
+                       stdout=open(run_dir / "clients.log", "w"), stderr=subprocess.STDOUT)
+        server.wait(timeout=120)
+    except Exception as exc:
+        print(f"  ! {run_id}: {exc}", flush=True)
+    finally:
+        subprocess.run(["docker", "compose", "down"], env=env)
+        if server.poll() is None:
+            server.terminate()
+        subprocess.run(["scp", "-i", key, "-r", f"ubuntu@{host}:{remote_dir}/results/{run_id}", str(Path(results_dir))])
+    return _is_complete(run_dir)
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Run all experiment conditions")
@@ -84,6 +114,10 @@ def main() -> None:
     p.add_argument("--data-dir", default="data")
     p.add_argument("--resume", action="store_true", help="skip runs that already completed")
     p.add_argument("--run-timeout", type=float, default=3600.0, help="seconds per run")
+    p.add_argument("--remote-host", default=None, help="EC2 address; run the server there, clients in local Docker")
+    p.add_argument("--ssh-key", default=None)
+    p.add_argument("--remote-dir", default="~/cloud-craft")
+
     args = p.parse_args()
 
     cfg = load_config(args.config)
@@ -97,9 +131,12 @@ def main() -> None:
             continue
         print(f"[{i}/{len(combos)}] {run_id}: running", flush=True)
         t = time.time()
-        ok = run_one(args.config, cfg, cond, split, seed, args.results_dir, args.data_dir,
-                     int(exp.get("server_port", 8080)), args.run_timeout)
-        print(f"    {'ok' if ok else 'FAILED'} in {time.time() - t:.0f}s", flush=True)
+        if args.remote_host:
+            ok = run_one_remote(args.config, cond, split, seed, args.results_dir, 
+                                args.remote_host, args.ssh_key, args.remote_dir, args.run_timeout)
+        else:
+            ok = run_one(args.config, cfg, cond, split, seed, args.results_dir, args.data_dir,
+                         int(exp.get("server_port", 8080)), args.run_timeout)
         if not ok:
             failed.append(run_id)
     if failed:
