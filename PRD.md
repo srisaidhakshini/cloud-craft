@@ -1,6 +1,6 @@
 # PRD: Performance-Aware Federated Learning
 
-Oct 6, 2026 · CloudCraft (Kinjal Nandi, Sri Saidhakshini V)
+Oct 6, 2026 (updated Oct 14, 2026) · CloudCraft (Kinjal Nandi, Sri Saidhakshini V)
 
 > Living version: https://claude.ai/code/artifact/e48be38e-3bff-4dd0-9e52-21269d76b8fc
 
@@ -13,7 +13,7 @@ We will add a performance-scoring and client-selection layer to FedAvg that pick
 | Project | Performance-Aware Federated Learning |
 | Team | CloudCraft: Kinjal Nandi, Sri Saidhakshini V |
 | Type | Academic / research prototype |
-| Status | Planning; roadmap defined, build not started |
+| Status | Build in progress: core code and runner (local and EC2) written; full-length validation and the 24-run experiments are pending (see Implementation status) |
 
 ## Problem
 
@@ -64,22 +64,22 @@ Success means the performance-aware strategy reaches the target accuracy faster 
 
 P0 items are required for the core result; P1 items strengthen it.
 
-| ID | Requirement | Priority |
-| --- | --- | --- |
-| FR-1 | Split MNIST across 5 clients with a fixed seed; support both an IID split and a non-IID Dirichlet split (alpha = 0.5). Save split indices to disk. | P0 |
-| FR-2 | One client codebase whose behaviour comes from a PROFILE setting: Fast (no delay), Medium (0.5–1 s), Slow (2–4 s), High-latency (network delay), Unreliable (about 30% failure). | P0 |
-| FR-3 | Each client reports its local training time and sample count in its fit metrics. | P0 |
-| FR-4 | The server measures each client's round-trip time and derives latency as round-trip time minus training time. | P0 |
-| FR-5 | The server records failures and timeouts per client and tracks reliability as a running success rate. | P0 |
-| FR-6 | The scorer computes a 0–1 score per client from those three signals (see Scoring specification). | P0 |
-| FR-7 | The strategy selects every client in round 1, then the top K by score from round 2 on. | P0 |
-| FR-8 | An exploration rule keeps low-scoring clients participating occasionally. | P0 |
-| FR-9 | Rounds have a configurable timeout; the strategy accepts failures and aggregates whatever arrived. | P0 |
-| FR-10 | Log one CSV row per client per round: run_id, condition, seed, round, client_id, selected, train_time, rtt, latency, success, score, global_accuracy, global_loss, wall_clock. | P0 |
-| FR-11 | A single experiment runner executes every condition × split × seed from YAML configs without manual steps. | P0 |
-| FR-12 | Analysis scripts produce the comparison plots and a mean ± std table from the CSV logs. | P0 |
-| FR-13 | K, scoring weights, EMA factor, exploration rate and timeout are all config values, not hard-coded. | P1 |
-| FR-14 | Docker Compose starts all 5 clients, pointed at a configurable server address. | P1 |
+| ID | Requirement | Priority | Status |
+| --- | --- | --- | --- |
+| FR-1 | Split MNIST across 5 clients with a fixed seed; support both an IID split and a non-IID Dirichlet split (alpha = 0.5). Save split indices to disk. | P0 | Built |
+| FR-2 | One client codebase whose behaviour comes from a PROFILE setting: Fast (no delay), Medium (0.5–1 s), Slow (2–4 s), High-latency (network delay), Unreliable (about 30% failure). | P0 | Built |
+| FR-3 | Each client reports its local training time and sample count in its fit metrics. | P0 | Built |
+| FR-4 | The server measures each client's round-trip time and derives latency as round-trip time minus training time. | P0 | Built |
+| FR-5 | The server records failures and timeouts per client and tracks reliability as a running success rate. | P0 | Built |
+| FR-6 | The scorer computes a 0–1 score per client from those three signals (see Scoring specification). | P0 | Built, unit-tested |
+| FR-7 | The strategy selects every client in round 1, then the top K by score from round 2 on. | P0 | Built |
+| FR-8 | An exploration rule keeps low-scoring clients participating occasionally. | P0 | Built (ε-swap; staleness bonus also available) |
+| FR-9 | Rounds have a configurable timeout; the strategy accepts failures and aggregates whatever arrived. | P0 | Built |
+| FR-10 | Log one CSV row per client per round: run_id, condition, seed, round, client_id, selected, train_time, rtt, latency, success, score, global_accuracy, global_loss, wall_clock. | P0 | Built (plus a `round_time` column) |
+| FR-11 | A single experiment runner executes every condition × split × seed from YAML configs without manual steps. | P0 | Built (local and `--remote-host`) |
+| FR-12 | Analysis scripts produce the comparison plots and a mean ± std table from the CSV logs. | P0 | Built, smoke-tested only |
+| FR-13 | K, scoring weights, EMA factor, exploration rate and timeout are all config values, not hard-coded. | P1 | Built |
+| FR-14 | Docker Compose starts all 5 clients, pointed at a configurable server address. | P1 | Built |
 
 ## Scoring and selection specification
 
@@ -91,7 +91,7 @@ $$
 \bar{x}_i^{(t)} = \beta \, x_i^{(t)} + (1 - \beta) \, \bar{x}_i^{(t-1)}
 $$
 
-**Score** (proposed default weights 0.4 / 0.3 / 0.3; T = training time, L = latency, R = reliability, each min–max normalised across clients)
+**Score** (current config weights 0.3 / 0.2 / 0.5, changed from the originally proposed 0.4 / 0.3 / 0.3; T = training time, L = latency, R = reliability, each min–max normalised across clients)
 
 $$
 S_i = w_T \,(1 - \hat{T}_i) + w_L \,(1 - \hat{L}_i) + w_R \, R_i, \quad w_T + w_L + w_R = 1
@@ -105,7 +105,7 @@ $$
 4. A failed or timed-out client gets success = 0 for that round; its training time and latency are not updated.
 5. Aggregation is standard FedAvg, weighted by each client's sample count.
 
-**Worked example** (from the pitch deck, after round 1)
+**Worked example** (from the pitch deck, after round 1; illustrative, not produced by the current weights)
 
 | Client | Score | Selected in round 2 |
 | --- | --- | --- |
@@ -142,11 +142,11 @@ Each round, clients send back weights plus training time; the scorer updates its
 
 | Layer | Choice |
 | --- | --- |
-| ML framework | PyTorch |
-| FL framework | Flower (version pinned) |
+| ML framework | PyTorch 2.6.0 (CPU), Python 3.13 |
+| FL framework | Flower 1.39.0 (pinned; was 1.13.1 when first built) |
 | Model and data | Small CNN on MNIST |
 | Server | AWS EC2, public IP, gRPC over HTTP/2 |
-| Clients | 5 Docker containers via Docker Compose |
+| Clients | 5 Docker containers via Docker Compose (local machine; server on EC2) |
 | Network delay | tc netem inside the High-latency container |
 | Experiments | YAML configs + one Python runner |
 | Analysis | pandas + matplotlib |
@@ -179,18 +179,31 @@ We run 4 conditions × 2 data splits × 3 seeds = 24 runs. Random selection (B) 
 
 ## Milestones
 
-Five phases run in order; each ends with a check that must pass before the next starts. Dates are not set yet; the effort split is a guide.
+Five phases run in order; each ends with a check that must pass before the next starts. Dates are not set yet; the effort split is a guide. Status as of Oct 14, 2026.
 
 1. **Setup (about 15% of effort):** repo, pinned environment, IID and non-IID splits, 5 client profiles.
    - Done when: one client trained alone reaches about 98% on MNIST.
+   - Status: code done; the 98% check has not been run.
 2. **Baseline (about 20%):** full FedAvg locally with Docker Compose, then the server on EC2 with timeouts and CSV logging.
    - Done when: a full baseline run on EC2 completes with a complete log.
+   - Status: local baseline runs end to end; the EC2 runner path is written, but a complete EC2 baseline run is not yet confirmed.
 3. **Selection logic (about 25%):** scorer, top-K selection, exploration, unit tests.
    - Done when: tests pass and logs show Slow and Unreliable clients picked less often, but not never.
+   - Status: code and 15 unit tests done. The selection behaviour is not yet confirmed on a full-length run (a 4-round smoke run was too short to show it); `configs/medium.yaml` (100 rounds) exists for this check.
 4. **Experiments (about 25%):** all 24 runs through the scripted runner.
    - Done when: every run has a complete log, and the EC2 instance is stopped.
+   - Status: runner built (resumable with `--resume`); sweep not run.
 5. **Wrap-up (about 15%):** plots, results table, report, final presentation.
    - Done when: the report and deck include the scoring formula, the results and the selection heatmap.
+   - Status: analysis script built; report and deck not started.
+
+## Implementation status
+
+Written and pushed: scorer and selection (`cloudcraft/scoring.py`), strategy with timing, failure tracking and CSV logging (`strategy.py`), profile-driven client, seeded IID and Dirichlet splits, experiment runner (local and EC2 via `--remote-host`), analysis script, Docker Compose, and configs for smoke, medium (100 rounds) and the full sweep.
+
+Verified: 15 scorer unit tests; a 4-round smoke sweep of conditions A–D with complete logs, on Flower 1.13.1.
+
+Not verified yet: anything on the current pins (Flower 1.39.0, Python 3.13); full-length runs; the single-client 98% check; the EC2 path; the Docker Compose path; the success metrics in this document.
 
 ## Risks, open questions and future scope
 
@@ -203,14 +216,15 @@ Five phases run in order; each ends with a check that must pass before the next 
 | Flower API changes between versions | Code breaks mid-project | Pin the version; follow that version's docs only |
 | IID MNIST is too easy to show any accuracy difference | Results look trivial | Non-IID split is mandatory, not future scope |
 | EC2 networking (ports, public IP changes) eats time | Phase 2 slips | Get one remote client connected in week one; use an Elastic IP |
+| Flower was bumped from 1.13.1 to 1.39.0 after the code was written and smoke-tested | Strategy or client code may break or behave differently | Re-run unit tests and the smoke config on the new pins before any experiment |
 
 **Open questions**
 
 - [ ] Final deadline and dates for each phase?
 - [ ] Target accuracy for the time-to-accuracy metric: 97% or another value?
-- [ ] Default K and scoring weights: keep 3 and 0.4 / 0.3 / 0.3, or tune them?
+- [ ] Default K and scoring weights: config now uses K = 3 and 0.3 / 0.2 / 0.5; confirm these are final, and note the reason in the report.
 - [ ] Exploration method: ε-greedy, staleness bonus, or compare both?
-- [ ] Clients from laptops over the internet, or from a second EC2 instance in the same region?
+- [x] Clients from laptops over the internet, or from a second EC2 instance? Current setup: clients in local Docker, server on EC2 (confirm this is final).
 
 **Future scope**
 
