@@ -62,7 +62,7 @@ def sync(host: str, key: str, remote_dir: str, local: Path):
 
 def curves(df: pd.DataFrame, x: str, target: float):
     splits = sorted(df["split"].unique())
-    fig, axes = plt.subplots(1, len(splits), figsize=(6 * len(splits), 4), squeeze=False)
+    fig, axes = plt.subplots(1, len(splits), figsize=(4.5 * len(splits), 3), squeeze=False)
     for ax, split in zip(axes[0], splits):
         for cond in sorted(df["condition"].unique()):
             g = df[(df["split"] == split) & (df["condition"] == cond)].drop_duplicates(["seed", "round"])
@@ -91,7 +91,7 @@ def curves(df: pd.DataFrame, x: str, target: float):
 
 def round_times(df: pd.DataFrame):
     splits = sorted(df["split"].unique())
-    fig, axes = plt.subplots(1, len(splits), figsize=(6 * len(splits), 4), squeeze=False)
+    fig, axes = plt.subplots(1, len(splits), figsize=(4.5 * len(splits), 3), squeeze=False)
     for ax, split in zip(axes[0], splits):
         for cond in sorted(df["condition"].unique()):
             g = df[(df["split"] == split) & (df["condition"] == cond)].drop_duplicates(["seed", "round"])
@@ -107,7 +107,7 @@ def round_times(df: pd.DataFrame):
 def heatmap(df: pd.DataFrame, cond: str, split: str):
     g = df[(df["condition"] == cond) & (df["split"] == split)]
     mat = g.groupby(["client_id", "round"])["selected"].mean().unstack("round")
-    fig, ax = plt.subplots(figsize=(9, 2.8))
+    fig, ax = plt.subplots(figsize=(7, 2.4))
     im = ax.imshow(mat.values, aspect="auto", cmap="Blues", vmin=0, vmax=1)
     ax.set_yticks(range(len(mat.index)), [f"client {c}" for c in mat.index])
     ax.set_xticks(range(len(mat.columns)), mat.columns)
@@ -177,11 +177,11 @@ with tab_sum:
         st.dataframe(runs, hide_index=True, use_container_width=True)
 
 with tab_acc:
-    st.pyplot(curves(data, "wall_clock", target))
-    st.pyplot(curves(data, "round", target))
+    st.pyplot(curves(data, "wall_clock", target), use_container_width=False)
+    st.pyplot(curves(data, "round", target), use_container_width=False)
 
 with tab_time:
-    st.pyplot(round_times(data))
+    st.pyplot(round_times(data), use_container_width=False)
 
 with tab_sel:
     late = (data[data["round"] >= 2].groupby(["split", "condition", "client_id"])["selected"]
@@ -193,7 +193,7 @@ with tab_sel:
         a, b = st.columns(2)
         cond = a.selectbox("Condition", perf)
         split = b.selectbox("Split", sorted(data["split"].unique()))
-        st.pyplot(heatmap(data, cond, split))
+        st.pyplot(heatmap(data, cond, split), use_container_width=False)
 
 with tab_runs:
     st.dataframe(status, hide_index=True, use_container_width=True)
