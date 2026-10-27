@@ -5,7 +5,7 @@ training:
   batch_size: 64
   lr: 0.01
   momentum: 0.9
-  round_timeout: 30        # seconds; bounds every round (FR-9)
+  round_timeout: 60        # seconds; bounds every round (FR-9)
   failure_mode: drop       # drop = client returns a failure; timeout = client hangs past round_timeout
 
 data:
@@ -21,7 +21,10 @@ clients:
   "4": high_latency
   "5": unreliable
 
-profiles: {}
+profiles:
+  medium: {train_delay: [3.0, 5.0]}
+  slow: {train_delay: [8.0, 12.0]}
+  high_latency: {net_delay: [3.0, 5.0]}
 
 scoring:
   w_time: 0.3
