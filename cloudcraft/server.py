@@ -49,6 +49,7 @@ def build_strategy(cfg, condition: str, split: str, seed: int, run_dir: Path, da
         k=int(cond["k"]),
         epsilon=float(cond.get("epsilon", 0.0)),
         staleness_bonus=float(cond.get("staleness_bonus", 0.0)),
+        warmup_rounds=int(cond.get("warmup_rounds", 2)),
         scoring=ScoringConfig(**cfg["scoring"]),
         fit_config={
             "local_epochs": tr["local_epochs"], "batch_size": tr["batch_size"],

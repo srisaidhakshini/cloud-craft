@@ -36,6 +36,7 @@ selection:
   k: 3
   epsilon: 0.1
   staleness_bonus: 0.0
+  warmup_rounds: 2
 
 # The four experiment conditions (PRD Experiment design).
 conditions:

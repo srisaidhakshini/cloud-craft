@@ -93,6 +93,7 @@ class PerformanceAwareStrategy(FedAvg):
         scoring: ScoringConfig,
         epsilon: float = 0.0,
         staleness_bonus: float = 0.0,
+        warmup_rounds: int = 2,
         fit_config: Optional[Dict[str, Scalar]] = None,
         log_path: str,
         connect_timeout: float = 300.0,
@@ -111,6 +112,7 @@ class PerformanceAwareStrategy(FedAvg):
         self.run_id, self.condition, self.seed = run_id, condition, seed
         self.mode, self.k, self.scoring = mode, k, scoring
         self.epsilon, self.staleness_bonus = epsilon, staleness_bonus
+        self.warmup_rounds = max(1, int(warmup_rounds))
         self.fit_config = dict(fit_config or {})
         self.connect_timeout = connect_timeout
         self.rng = random.Random(seed)
@@ -150,7 +152,7 @@ class PerformanceAwareStrategy(FedAvg):
             return sorted(client_ids)
         if self.mode == "random":
             return select_random_k(client_ids, self.k, self.rng)
-        if server_round == 1:
+        if server_round <= self.warmup_rounds:
             return sorted(client_ids)
         scores = score_clients(self.stats, self.scoring)
         explore = self.mode == "perf_explore"
@@ -192,8 +194,12 @@ class PerformanceAwareStrategy(FedAvg):
             train_time = float(ok_metrics[cid]["train_time"]) if ok else None
             rtt = out["rtt"]
             latency = (rtt - train_time) if ok and rtt is not None else None
+            use_times = server_round >= self.warmup_rounds
             self.stats[cid] = update_stats(
-                self.stats[cid], ok, train_time, latency, self.scoring.ema_beta
+                self.stats[cid], ok,
+                train_time if use_times else None,
+                latency if use_times else None,
+                self.scoring.ema_beta,
             )
             self._pending[cid] = {
                 "selected": 1, "train_time": train_time, "rtt": rtt,
