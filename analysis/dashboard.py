@@ -21,10 +21,10 @@ from analyze import LABELS, SPLIT_NAME, per_run_metrics, summary_table  # noqa: 
 
 st.set_page_config(page_title="CloudCraft results", layout="wide")
 
-DEFAULT_KEY = ""  # paste the full path to your .pem file in the sidebar
+DEFAULT_KEY =   "" #Add the filepath to your .pem file
 
 
-# ------------------------------------------------------------------ data
+#data
 def signature(folder: Path) -> tuple:
     if not folder.exists():
         return ()
@@ -65,10 +65,13 @@ def sync(host: str, key: str, remote_dir: str, local: Path):
     return subprocess.run(cmd, capture_output=True, text=True, timeout=900)
 
 
-def ssh(host: str, key: str, cmd: str, timeout: int = 30):
-    return subprocess.run(
-        ["ssh", "-i", key, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=10",
-         f"ubuntu@{host}", cmd], capture_output=True, text=True, timeout=timeout)
+def ssh(host: str, key: str, cmd: str, timeout: int = 45):
+    try:
+        return subprocess.run(
+            ["ssh", "-i", key, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15",
+             f"ubuntu@{host}", cmd], capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:  # timeout, ssh missing, bad key path
+        return subprocess.CompletedProcess([], 255, "", f"ssh failed: {exc}")
 
 
 def via_server(server_ip: str, cmd: str) -> str:
@@ -201,15 +204,29 @@ with st.expander("EC2 control panel", expanded=True):
              f"ubuntu@{host}", "tmux attach -t sweep || exec bash -l"],
             creationflags=subprocess.CREATE_NEW_CONSOLE)
 
-    live = st.toggle("Live terminal (refreshes every 5 s)")
+    live = st.toggle("Live terminal (refreshes every 15 s)")
 
-    @st.fragment(run_every=5)
+    @st.fragment(run_every=15)
     def live_terminal():
         if host and live:
-            r = ssh(host, key, "tmux capture-pane -p -t sweep -S -60 2>&1 | tail -n 40", 15)
+            r = ssh(host, key, "tmux capture-pane -p -t sweep -S -60 2>&1 | tail -n 40", 30)
             st.code(out_text(r), language=None)
 
     live_terminal()
+
+    live_logs = st.toggle("Live server and client logs (newest run, every 15 s)")
+
+    @st.fragment(run_every=15)
+    def live_logs_view():
+        if not (host and live_logs):
+            return
+        base = f"~/cloud-craft/{folder.name}"
+        left, right = st.columns(2)
+        for col, name in ((left, "server.log"), (right, "clients.log")):
+            r = ssh(host, key, f"d=$(ls -t {base} | head -1); echo == $d/{name}; tail -n 30 {base}/$d/{name}", 30)
+            col.code(out_text(r), language=None)
+
+    live_logs_view()
 
     if st.button("Show the run in progress", disabled=not host):
         cmd = via_server(server_ip, "d=$(ls -t ~/cloud-craft/results | head -1); echo $d; "
@@ -223,7 +240,11 @@ with st.expander("EC2 control panel", expanded=True):
             st.line_chart(live_df.drop_duplicates("round").set_index("round")["global_accuracy"])
             st.dataframe(live_df[live_df["round"] == live_df["round"].max()], hide_index=True)
         except Exception:
-            st.code(out_text(r), language=None)
+            if r.returncode == 0 and name.strip() and not body.strip():
+                st.warning(f"{name.strip()}: no finished round yet, so log.csv is still empty. "
+                           "Check the server and client logs.")
+            else:
+                st.code(out_text(r), language=None)
 
 #results
 if not folder.exists():
