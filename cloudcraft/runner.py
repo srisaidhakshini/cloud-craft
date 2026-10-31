@@ -117,12 +117,16 @@ def main() -> None:
     p.add_argument("--remote-host", default=None, help="EC2 address; run the server there, clients in local Docker")
     p.add_argument("--ssh-key", default=None)
     p.add_argument("--remote-dir", default="~/cloud-craft")
+    p.add_argument("--conditions",nargs="+",default=None)
+    p.add_argument("--splits",nargs="+",default= None)
+    p.add_argument("--seeds",type=int,nargs="+",default=None)
 
     args = p.parse_args()
 
     cfg = load_config(args.config)
     exp = cfg["experiment"]
-    combos = list(itertools.product(exp["splits"], exp["seeds"], exp["conditions"]))
+    combos = list(itertools.product(
+        args.splits or exp["splits"], args.seeds or exp["seeds"], args.conditions or exp["conditions"]))
     failed = []
     for i, (split, seed, cond) in enumerate(combos, 1):
         run_id = f"{cond}_{split}_seed{seed}"
