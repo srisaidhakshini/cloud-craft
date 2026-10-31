@@ -6,7 +6,7 @@ training:
   lr: 0.01
   momentum: 0.9
   round_timeout: 60        # seconds; bounds every round (FR-9)
-  failure_mode: drop       # drop = client returns a failure; timeout = client hangs past round_timeout
+  failure_mode: timeout       # drop = client returns a failure; timeout = client hangs past round_timeout
 
 data:
   samples_per_client: null # cap per client for quick smoke runs
