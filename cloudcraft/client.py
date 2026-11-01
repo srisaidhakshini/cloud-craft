@@ -92,7 +92,7 @@ class ProfiledClient(fl.client.Client):
 
     def _simulated_failure(self, cfg) -> FitRes:
         if cfg.get("failure_mode", "drop") == "timeout":
-            sleep(float(cfg.get("round_timeout", 30)) + 1.0)  # outlast the server's timeout
+            sleep(0.9 * float(cfg.get("round_timeout", 30)))  # stall most of the round, then report the failure
         return FitRes(
             status=Status(code=Code.FIT_NOT_IMPLEMENTED, message="simulated client failure"),
             parameters=ndarrays_to_parameters([]),
