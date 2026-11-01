@@ -1,96 +1,250 @@
-# CloudCraft: Performance-Aware Federated Learning
+# CloudCraft
 
-CloudCraft adds performance scoring and client selection to Flower's FedAvg. It ranks clients using training time, estimated communication latency and reliability, then selects K clients per round. Optional exploration lets lower-ranked clients re-enter training.
+### Performance-aware federated learning
 
-**Team:** Kinjal Nandi and Sri Saidhakshini V.
-**Documentation updated:** November 2, 2026.
+CloudCraft trains a shared machine-learning model across **five simulated clients**, each with its own portion of the MNIST handwritten-digit dataset. Some clients are fast, some are slow, and some have unreliable connections.
 
-See the [product requirements](PRD.md) and [detailed project report](REPORT.md) for the design, evaluation plan, implementation status and limitations.
+Instead of asking every client to train in every round, CloudCraft measures their performance and chooses which clients should participate next. The goal is to reach good model accuracy sooner while giving slower clients opportunities to contribute.
 
-## Current status
+**Team:** Kinjal Nandi and Sri Saidhakshini V
 
-Implemented: scorer, selection, Flower strategy, five client profiles, seeded MNIST splits, local/EC2 runner, CSV analysis, Streamlit dashboard and Docker Compose clients. This checkout contains no experiment results, so speedup and accuracy targets remain unverified. Earlier documentation records 15 scorer tests and a four-round smoke sweep on Flower 1.13.1; compatibility with the current dependency pins still needs validation.
+[Getting started](#getting-started) · [System architecture](#system-architecture) · [Run experiments](#run-experiments) · [View results](#view-results) · [Detailed report](REPORT.md)
 
-## Repository layout
+## How it works
 
-| Path | Purpose |
-| --- | --- |
-| `cloudcraft/scoring.py` | EMA statistics, weighted scores, top-K, random selection and exploration |
-| `cloudcraft/strategy.py` | FedAvg integration, warm-up, timing, failures and CSV logging |
-| `cloudcraft/server.py`, `cloudcraft/client.py` | Server and profile-driven client entry points |
-| `cloudcraft/model.py` | MNIST CNN, training, evaluation and parameter conversion |
-| `cloudcraft/data.py`, `cloudcraft/prepare_data.py` | Seeded IID and Dirichlet splits |
-| `cloudcraft/runner.py` | Local or remote experiment orchestration and resume support |
-| `analysis/analyze.py` | Comparison plots and per-run/summary metrics |
-| `analysis/dashboard.py` | Streamlit results viewer and SSH-based EC2 controls |
-| `configs/base.yaml`, `configs/experiment.yaml` | Defaults and 30-round full sweep override |
-| `tests/test_scoring.py` | 15 scorer and selector unit tests |
-| `docker/`, `docker-compose.yml` | Container setup for five clients |
+In federated learning, each client trains on its own data and sends model updates to a central server. The server combines those updates into one shared model. This project uses **Flower** to coordinate training and **PyTorch** to train a small image classifier.
 
-## Setup
+CloudCraft adds a selection step:
 
-The requirements declare Python 3.13 and pinned packages, including Flower 1.39.0 and PyTorch 2.6.0. Successful installation of this combination has not been established in this checkout.
+1. **Observe:** ask all five clients to train during the first two rounds.
+2. **Score:** measure training time, communication overhead and successful responses.
+3. **Select:** choose the three highest-scoring clients for the next round.
+4. **Explore:** in the exploration variant, occasionally swap in another client so lower-ranked clients can contribute again.
+5. **Repeat:** combine successful updates, evaluate the model and record the results.
+
+The number of selected clients is called **K**. By default, K = 3. Exploration makes participation possible; it does not guarantee every client is selected again within a short run.
+
+## System architecture
+
+```mermaid
+flowchart TB
+    Config["YAML configuration"] --> Runner["Experiment runner"]
+    Runner --> Server
+    Runner --> Clients
+
+    subgraph Server["Flower server — local machine or AWS EC2"]
+        Select["Select clients"] --> Aggregate["Combine successful model updates"]
+        Aggregate --> Evaluate["Evaluate shared model on MNIST"]
+        Aggregate --> Score["Update performance scores"]
+        Score --> Select
+    end
+
+    subgraph Clients["Five clients — local processes or Docker containers"]
+        Fast["1 · Fast"]
+        Medium["2 · Medium"]
+        Slow["3 · Slow"]
+        Latency["4 · High latency"]
+        Unreliable["5 · Unreliable"]
+    end
+
+    Select -->|"Shared model to selected clients"| Clients
+    Clients -->|"Model updates and training measurements"| Aggregate
+    Evaluate --> Logs["Run logs and completion metadata"]
+    Score --> Logs
+    Logs --> Analysis["Analysis script → plots and summary tables"]
+    Logs --> Dashboard["Streamlit dashboard → interactive results"]
+```
+
+Each client uses its own saved data partition. The server records request duration and failures, and uses client-reported training time to estimate communication overhead. The runner automates the runs; the analysis tools help compare their results.
+
+## Getting started
+
+### 1. Set up Python
+
+Run these commands from the repository root. The project declares **Python 3.13** and pinned dependencies in `requirements.txt`. The current pinned environment still needs installation and integration validation; see [project status](#project-status).
+
+**Windows PowerShell**
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+**Linux / macOS**
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Then install the dependencies and run the scorer tests:
+
+```bash
 python -m pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 python -m pytest tests
 ```
 
-On Linux/macOS, activate with `source .venv/bin/activate`. Run commands from the repository root. Initial data preparation downloads MNIST and requires network access.
+The local workflow uses Python processes, so Docker and an AWS account are only needed for the container/cloud workflow.
 
-## Run experiments
+### 2. Run one local baseline
 
 ```bash
-# One 20-round baseline as an initial integration check
 python -m cloudcraft.runner --config configs/base.yaml --conditions A --splits iid --seeds 0
+```
 
-# Full sweep: 4 conditions x 2 splits x 3 seeds, 30 rounds per run
-python -m cloudcraft.runner --config configs/experiment.yaml
-python -m cloudcraft.runner --config configs/experiment.yaml --resume
+This starts a server and five clients on your machine, prepares the data, and runs **20 training rounds** with all clients participating. The first run downloads MNIST and needs internet access. Runtime depends on your machine and simulated delays; this is a baseline run rather than a quick smoke test.
 
-# Analyse complete runs
-python analysis/analyze.py --results results --out analysis/output --target 0.97
+Results are saved under `results/A_iid_seed0/`.
 
-# Open the dashboard
+### 3. Open the results dashboard
+
+```bash
 streamlit run analysis/dashboard.py
 ```
 
-The dashboard defaults to `results_full2`; change its Results folder to `results` for the runner's default output. Historical `smoke.yaml` and `medium.yaml` references have been removed because those files are absent. For shorter checks, create an override YAML beside `base.yaml`; the loader merges it with that file.
+Open the address printed by Streamlit. In the sidebar, set **Results folder** to `results`—the dashboard initially uses `results_full2`.
 
-| Condition | Mode | Behaviour |
+The dashboard shows accuracy, round duration, client selection and run completion. Its cloud controls are useful when you move to EC2; local results can be viewed directly.
+
+## Run experiments
+
+CloudCraft compares four ways to select clients:
+
+| Condition | Selection method | Question it answers |
 | --- | --- | --- |
-| A | `all` | All five clients every round |
-| B | `random` | Random K = 3 each round |
-| C | `perf` | All clients in warm-up rounds 1–2, then top-K |
-| D | `perf_explore` | C plus epsilon swaps; optional staleness bonus |
+| **A — Full FedAvg** | All five clients every round | How does full participation perform? |
+| **B — Random** | Three randomly chosen clients every round | Does selecting fewer clients help on its own? |
+| **C — Performance-aware** | All five for two warm-up rounds, then the best three by score | Does performance-based selection help? |
+| **D — Performance + exploration** | C, with occasional swaps to include other clients | What is the cost and benefit of broader participation? |
 
-Current defaults: K = 3, epsilon = 0.1, EMA beta = 0.3, weights 0.3/0.2/0.5 for time/latency/reliability, timeout = 60 s and timeout-style simulated failures. Effective profile delays are Medium 3–5 s, Slow 8–12 s and High-latency 3–5 s; Unreliable fails with probability 0.3.
-
-## Outputs and interpretation
-
-Each run writes `results/<condition>_<split>_seed<n>/log.csv`, `meta.json` and process logs. There is one CSV row per client per round, including unselected clients. The server marks completion by checking the row count against rounds x clients; analysis includes only runs marked complete.
-
-`score` is computed after the logged round. Unselected clients have blank timing and success fields. `wall_clock` excludes server evaluation; `round_time` measures the fit phase up to aggregation entry. Estimated latency is RTT minus reported training time, so it includes transfer and other overhead rather than measuring pure network latency.
-
-Analysis produces `per_run_metrics.csv`, `summary_table.csv`, `summary_table.md`, accuracy/time plots and selection heatmaps. Time to target requires accuracy to remain above target through the final round. Misses are omitted from its mean and counted in `target_reached`. Coverage includes warm-up; use the dashboard's post-warm-up table to assess continued participation.
-
-## EC2 deployment
-
-Prepare matching MNIST data and splits on the server and client host, build the `cloudcraft` image on the server and build the Compose clients before running a remote sweep. The remote path uses SSH/SCP, the `ubuntu` account and port 8080.
+Try one performance-aware run:
 
 ```bash
-python -m cloudcraft.prepare_data --config configs/experiment.yaml
-# On the server host:
-docker build -t cloudcraft -f docker/Dockerfile .
-# On the client host:
-docker compose build
-python -m cloudcraft.runner --config configs/experiment.yaml --remote-host <server-ip> --ssh-key <key.pem> --remote-dir ~/cloud-craft
+python -m cloudcraft.runner --config configs/base.yaml --conditions D --splits iid --seeds 0
 ```
 
-Clients can run locally or on a separate EC2 instance. The dashboard can connect to the client instance, start the remote runner and synchronize results. Enter host/key values in its sidebar; verify the server address and remote paths for your deployment. Restrict inbound gRPC to the client host and SSH to authorized hosts. Optional `NETEM_DELAY` adds container-level delay on top of the software profile. Stop instances when experiments finish.
+Run the complete comparison:
 
-## Remaining validation
+```bash
+python -m cloudcraft.runner --config configs/experiment.yaml
+```
 
-Validate the installed environment, single-client learning, Docker connectivity, timeout recovery and longer-run selection behaviour before collecting the full sweep. The proposed acceptance targets are at least 30% lower time to 97% accuracy versus full FedAvg, final accuracy within one percentage point, and continued participation after warm-up. Numerical conclusions require complete logs across both splits and all three seeds. See [REPORT.md](REPORT.md) for the reporting protocol.
+This performs **24 runs**, each with **30 rounds**: four conditions × two data splits × three random seeds. An **IID** split distributes data similarly across clients; a **Dirichlet** split gives clients different data distributions. Repeating seeds helps measure variation.
+
+To continue a sweep while skipping completed runs:
+
+```bash
+python -m cloudcraft.runner --config configs/experiment.yaml --resume
+```
+
+Without `--resume`, the runner executes the requested runs again.
+
+## View results
+
+For interactive exploration, use the dashboard described above. For saved charts and tables, run:
+
+```bash
+python analysis/analyze.py --results results --out analysis/output --target 0.97
+```
+
+Analysis needs at least one completed run. It produces:
+
+| Output | What to look for |
+| --- | --- |
+| `summary_table.csv` / `summary_table.md` | Accuracy, timing and coverage, summarized across seeds |
+| `per_run_metrics.csv` | Metrics for each individual run |
+| `accuracy_vs_time.png` | How quickly each method improves accuracy |
+| `round_time.png` | How long training rounds take |
+| `selection_heatmap_*.png` | How often each client is chosen in C and D |
+
+Raw files are organized like this:
+
+```text
+results/
+└── A_iid_seed0/
+    ├── log.csv       # One row per client per round
+    ├── meta.json     # Expected rows, observed rows and completion flag
+    ├── server.log
+    └── client1.log   # Separate logs for each local client
+```
+
+**Reading the metrics:**
+
+- **Time to target** is the first recorded round reaching 97% accuracy and staying at or above it through the final round. Runs that miss the target are excluded from the time average; always check `target_reached` too.
+- **Training wall-clock time** excludes server-side evaluation, so it differs from total job runtime.
+- **Client coverage** in the summary includes the two warm-up rounds. Use the dashboard's post-warm-up selection table to check whether clients keep participating.
+- **Complete** means the server logged the expected row count. Analysis skips runs that are not marked complete.
+
+For exact metric definitions and interpretation limits, see the [detailed report](REPORT.md#7-logs-and-metric-definitions).
+
+## Configuration
+
+Edit `configs/base.yaml` to change shared defaults. `configs/experiment.yaml` inherits those defaults and changes the full sweep to 30 rounds. Custom override files placed beside `base.yaml` are merged in the same way.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `training.rounds` | 20; full sweep uses 30 | Number of training rounds per run |
+| `training.round_timeout` | 60 seconds | Time limit for a training round |
+| `selection.k` | 3 | Number of clients selected after warm-up in C/D, and each round in B |
+| `selection.warmup_rounds` | 2 | Initial all-client rounds in C and D |
+| `selection.epsilon` | 0.1 | Chance of attempting an exploration swap per selected slot in D |
+| `scoring.w_time` / `w_latency` / `w_reliability` | 0.3 / 0.2 / 0.5 | Importance of speed, communication overhead and reliability |
+| `scoring.ema_beta` | 0.3 | How strongly new measurements affect the smoothed statistics |
+
+The configured client profiles add these simulated conditions:
+
+| Client | Behaviour |
+| --- | --- |
+| Fast | No extra delay |
+| Medium | 3–5 seconds of extra training delay |
+| Slow | 8–12 seconds of extra training delay |
+| High-latency | 3–5 seconds of delay outside measured training time |
+| Unreliable | 30% failure probability per training attempt |
+
+The default failure mode simulates a timeout. Full scoring details, optional staleness-based exploration and measurement caveats are in the [report](REPORT.md).
+
+## Run on AWS EC2
+
+The cloud workflow places the Flower server on EC2 and runs the five Docker clients on your machine or a second EC2 instance. It requires Docker, SSH/SCP, an accessible `ubuntu` account and the repository on both hosts.
+
+1. Prepare matching MNIST data and split indices on **both hosts**:
+
+   ```bash
+   python -m cloudcraft.prepare_data --config configs/experiment.yaml
+   ```
+
+2. On the **server host**, build the server image:
+
+   ```bash
+   docker build -t cloudcraft -f docker/Dockerfile .
+   ```
+
+3. On the **client host**, build the clients and start the sweep:
+
+   ```bash
+   docker compose build
+   python -m cloudcraft.runner --config configs/experiment.yaml --remote-host <server-ip> --ssh-key <key.pem> --remote-dir ~/cloud-craft
+   ```
+
+Replace `<server-ip>` and `<key.pem>` with your server address and SSH key path. The remote repository path defaults to `~/cloud-craft`; use `--remote-dir` if yours differs. Allow port **8080** from the client host and SSH from authorized hosts. Stop idle EC2 instances after experiments.
+
+The dashboard can also synchronize cloud results and control a sweep through SSH. Enter your deployment's connection details in its sidebar. Optional `NETEM_DELAY` adds container-level network delay on top of the software profile.
+
+## Project structure
+
+| Path | Contents |
+| --- | --- |
+| `cloudcraft/` | Model, data preparation, clients, server, scoring and experiment runner |
+| `analysis/analyze.py` | Saved charts and metric tables |
+| `analysis/dashboard.py` | Interactive results dashboard and EC2 controls |
+| `configs/` | Shared settings and experiment overrides |
+| `tests/test_scoring.py` | 15 scorer and selection unit tests |
+| `docker/`, `docker-compose.yml` | Container setup for five clients |
+| [PRD.md](PRD.md) | Requirements and acceptance targets |
+| [REPORT.md](REPORT.md) | Detailed design, methodology, limitations and evaluation protocol |
+
+## Project status
+
+The scoring, selection, client/server code, experiment runner, Docker setup and analysis tools are implemented. Earlier documentation records passing scorer tests and a short smoke sweep on Flower 1.13.1. The current pins include Flower 1.39.0 and PyTorch 2.6.0; that environment and the cloud workflow still need validation.
+
+This checkout contains no experiment result logs. **The proposed 30% speedup and accuracy goals are targets, not measured results.** The next steps are to validate the environment, confirm learning and timeout recovery, and collect the complete 24-run comparison. See the [report](REPORT.md) for the full evaluation checklist.
