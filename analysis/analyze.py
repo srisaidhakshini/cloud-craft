@@ -40,7 +40,8 @@ def per_run_metrics(df: pd.DataFrame, target: float) -> pd.DataFrame:
     rows = []
     for (cond, split, seed), g in df.groupby(["condition", "split", "seed"]):
         rounds = g.drop_duplicates("round").sort_values("round")
-        hit = rounds[rounds["global_accuracy"] >= target]
+        stays = rounds["global_accuracy"][::-1].cummin()[::-1] >= target
+        hit = rounds[stays]
         sel = g.groupby("client_id")["selected"].mean()
         rows.append({
             "condition": cond, "split": split, "seed": seed,
