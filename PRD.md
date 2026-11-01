@@ -1,8 +1,10 @@
 # PRD: Performance-Aware Federated Learning
 
-Oct 6, 2026 (updated Oct 14, 2026) · CloudCraft (Kinjal Nandi, Sri Saidhakshini V)
+Oct 6, 2026 (updated Nov 2, 2026) · CloudCraft (Kinjal Nandi, Sri Saidhakshini V)
 
 > Living version: https://claude.ai/code/artifact/e48be38e-3bff-4dd0-9e52-21269d76b8fc
+
+Detailed implementation and evaluation report: [REPORT.md](REPORT.md). Team members: **Kinjal Nandi** and **Sri Saidhakshini V**. Individual task ownership has not been recorded.
 
 ## Overview
 
@@ -39,10 +41,10 @@ Success means the performance-aware strategy reaches the target accuracy faster 
 
 | Metric | Definition | Target |
 | --- | --- | --- |
-| Time to target accuracy | Wall-clock seconds until global test accuracy reaches 97% | At least 30% faster than full FedAvg |
+| Time to target accuracy | Training wall-clock seconds until accuracy reaches 97% and remains there through the final round | At least 30% faster than full FedAvg |
 | Final accuracy | Global test accuracy after the last round | Within 1 percentage point of full FedAvg |
 | Mean round time | Average seconds per round | Lower than full FedAvg and random K |
-| Client coverage | Share of rounds each client participates in | Every client above 0% (no client fully excluded) |
+| Client coverage | Share of rounds each client participates in | Every client above 0% after warm-up; evaluate observed coverage separately |
 | Reproducibility | Std. dev. across 3 seeded runs | Reported for every metric |
 
 **Non-goals**
@@ -67,12 +69,12 @@ P0 items are required for the core result; P1 items strengthen it.
 | ID | Requirement | Priority | Status |
 | --- | --- | --- | --- |
 | FR-1 | Split MNIST across 5 clients with a fixed seed; support both an IID split and a non-IID Dirichlet split (alpha = 0.5). Save split indices to disk. | P0 | Built |
-| FR-2 | One client codebase whose behaviour comes from a PROFILE setting: Fast (no delay), Medium (0.5–1 s), Slow (2–4 s), High-latency (network delay), Unreliable (about 30% failure). | P0 | Built |
+| FR-2 | One client codebase whose behaviour comes from a PROFILE setting: Fast (no delay), Medium (3–5 s), Slow (8–12 s), High-latency (network delay), Unreliable (about 30% failure). | P0 | Built |
 | FR-3 | Each client reports its local training time and sample count in its fit metrics. | P0 | Built |
 | FR-4 | The server measures each client's round-trip time and derives latency as round-trip time minus training time. | P0 | Built |
-| FR-5 | The server records failures and timeouts per client and tracks reliability as a running success rate. | P0 | Built |
+| FR-5 | The server records failures and timeouts per client and tracks reliability as an EMA of selected-round success indicators. | P0 | Built |
 | FR-6 | The scorer computes a 0–1 score per client from those three signals (see Scoring specification). | P0 | Built, unit-tested |
-| FR-7 | The strategy selects every client in round 1, then the top K by score from round 2 on. | P0 | Built |
+| FR-7 | The strategy selects every client during the configured warm-up (default rounds 1–2), then the top K by score from round 3 on. | P0 | Built |
 | FR-8 | An exploration rule keeps low-scoring clients participating occasionally. | P0 | Built (ε-swap; staleness bonus also available) |
 | FR-9 | Rounds have a configurable timeout; the strategy accepts failures and aggregates whatever arrived. | P0 | Built |
 | FR-10 | Log one CSV row per client per round: run_id, condition, seed, round, client_id, selected, train_time, rtt, latency, success, score, global_accuracy, global_loss, wall_clock. | P0 | Built (plus a `round_time` column) |
@@ -91,7 +93,7 @@ $$
 \bar{x}_i^{(t)} = \beta \, x_i^{(t)} + (1 - \beta) \, \bar{x}_i^{(t-1)}
 $$
 
-**Score** (current config weights 0.3 / 0.2 / 0.5, changed from the originally proposed 0.4 / 0.3 / 0.3; T = training time, L = latency, R = reliability, each min–max normalised across clients)
+**Score** (current config weights 0.3 / 0.2 / 0.5, changed from the originally proposed 0.4 / 0.3 / 0.3; T = training time, L = latency, R = EMA reliability; only T and L are min–max normalised across clients)
 
 $$
 S_i = w_T \,(1 - \hat{T}_i) + w_L \,(1 - \hat{L}_i) + w_R \, R_i, \quad w_T + w_L + w_R = 1
@@ -99,15 +101,15 @@ $$
 
 **Selection rules**
 
-1. Round 1: select all clients to collect first measurements.
-2. From round 2: rank clients by score and select the top K (default K = 3 of 5).
+1. Warm-up: select all clients for `selection.warmup_rounds` (default 2). Reliability updates on every selected round; timing statistics start updating at the final warm-up round, excluding first-round startup effects.
+2. After warm-up (default round 3): rank clients by score and select the top K (default K = 3 of 5).
 3. Exploration: each selected slot is swapped for a random unselected client with probability ε (default 0.1). Alternative to compare: a staleness bonus that raises a client's score for each round it sits out.
 4. A failed or timed-out client gets success = 0 for that round; its training time and latency are not updated.
 5. Aggregation is standard FedAvg, weighted by each client's sample count.
 
-**Worked example** (from the pitch deck, after round 1; illustrative, not produced by the current weights)
+**Worked example** (from the pitch deck, after warm-up; illustrative, not produced by the current weights)
 
-| Client | Score | Selected in round 2 |
+| Client | Score | Selected after warm-up |
 | --- | --- | --- |
 | 1 Fast | 0.91 | Yes |
 | 2 Medium | 0.78 | Yes |
@@ -133,7 +135,7 @@ The new layer is two components inside the Flower server: a scorer that turns cl
         ┌──────────────┬─────────┴────┬─────────────┴┬──────────────┐
    ┌────┴────┐   ┌─────┴────┐   ┌─────┴────┐   ┌─────┴──────┐  ┌────┴───────┐
    │  Fast   │   │  Medium  │   │   Slow   │   │High-latency│  │ Unreliable │
-   │no delay │   │ 0.5–1 s  │   │  2–4 s   │   │network dly │  │ fails ~30% │
+   │no delay │   │  3–5 s   │   │  8–12 s  │   │network dly │  │ fails ~30% │
    └─────────┘   └──────────┘   └──────────┘   └────────────┘  └────────────┘
           5 Docker clients, one profile each, MNIST shard per client
 ```
@@ -147,13 +149,13 @@ Each round, clients send back weights plus training time; the scorer updates its
 | Model and data | Small CNN on MNIST |
 | Server | AWS EC2, public IP, gRPC over HTTP/2 |
 | Clients | 5 Docker containers via Docker Compose (local machine; server on EC2) |
-| Network delay | tc netem inside the High-latency container |
+| Network delay | Software delay of 3–5 s by default; optional tc netem inside the High-latency container |
 | Experiments | YAML configs + one Python runner |
 | Analysis | pandas + matplotlib |
 
 ## Experiment design
 
-We run 4 conditions × 2 data splits × 3 seeds = 24 runs. Random selection (B) is the key control: it shows whether gains come from choosing smartly or just from training fewer clients.
+The configured sweep is 30 rounds per run. We plan 4 conditions × 2 data splits × 3 seeds = 24 runs. Random selection (B) is the key control: it shows whether gains come from choosing smartly or just from training fewer clients.
 
 | Condition | Selection | What it shows |
 | --- | --- | --- |
@@ -179,7 +181,7 @@ We run 4 conditions × 2 data splits × 3 seeds = 24 runs. Random selection (B) 
 
 ## Milestones
 
-Five phases run in order; each ends with a check that must pass before the next starts. Dates are not set yet; the effort split is a guide. Status as of Oct 14, 2026.
+Five phases run in order; each ends with a check that must pass before the next starts. Dates are not set yet; the effort split is a guide. Repository review as of Nov 2, 2026; historical execution claims below have not been independently reproduced in this checkout.
 
 1. **Setup (about 15% of effort):** repo, pinned environment, IID and non-IID splits, 5 client profiles.
    - Done when: one client trained alone reaches about 98% on MNIST.
@@ -189,19 +191,19 @@ Five phases run in order; each ends with a check that must pass before the next 
    - Status: local baseline runs end to end; the EC2 runner path is written, but a complete EC2 baseline run is not yet confirmed.
 3. **Selection logic (about 25%):** scorer, top-K selection, exploration, unit tests.
    - Done when: tests pass and logs show Slow and Unreliable clients picked less often, but not never.
-   - Status: code and 15 unit tests done. The selection behaviour is not yet confirmed on a full-length run (a 4-round smoke run was too short to show it); `configs/medium.yaml` (100 rounds) exists for this check.
+   - Status: code and 15 unit tests done. The selection behaviour is not yet confirmed on a full-length run (a 4-round smoke run was too short to show it); use a custom YAML override for a longer validation run; `configs/medium.yaml` is absent from this checkout.
 4. **Experiments (about 25%):** all 24 runs through the scripted runner.
    - Done when: every run has a complete log, and the EC2 instance is stopped.
    - Status: runner built (resumable with `--resume`); sweep not run.
 5. **Wrap-up (about 15%):** plots, results table, report, final presentation.
    - Done when: the report and deck include the scoring formula, the results and the selection heatmap.
-   - Status: analysis script built; report and deck not started.
+   - Status: analysis script built; this detailed report is now available in [REPORT.md](REPORT.md), and a review deck exists under `deck_work/`; measured results remain pending.
 
 ## Implementation status
 
-Written and pushed: scorer and selection (`cloudcraft/scoring.py`), strategy with timing, failure tracking and CSV logging (`strategy.py`), profile-driven client, seeded IID and Dirichlet splits, experiment runner (local and EC2 via `--remote-host`), analysis script, Docker Compose, and configs for smoke, medium (100 rounds) and the full sweep.
+Written and pushed: scorer and selection (`cloudcraft/scoring.py`), strategy with timing, failure tracking and CSV logging (`strategy.py`), profile-driven client, seeded IID and Dirichlet splits, experiment runner (local and EC2 via `--remote-host`), analysis script, Docker Compose, and base and full-sweep configs, plus a Streamlit results dashboard (`analysis/dashboard.py`). Historical smoke and medium configs are absent from this checkout.
 
-Verified: 15 scorer unit tests; a 4-round smoke sweep of conditions A–D with complete logs, on Flower 1.13.1.
+Previously documented verification (not reproduced by this document update): 15 scorer unit tests; a 4-round smoke sweep of conditions A–D with complete logs, on Flower 1.13.1.
 
 Not verified yet: anything on the current pins (Flower 1.39.0, Python 3.13); full-length runs; the single-client 98% check; the EC2 path; the Docker Compose path; the success metrics in this document.
 
@@ -232,3 +234,14 @@ Not verified yet: anything on the current pins (Flower 1.39.0, Python 3.13); ful
 - Combine with FedProx to target round time and client drift together.
 - Server-side fault tolerance: checkpointing and restart policies.
 - Scale beyond 5 clients and to larger models or datasets.
+
+
+## Current documentation and acceptance clarifications (Nov 2, 2026)
+
+- The checked-in configuration uses two warm-up rounds, a 60 s round timeout, timeout-style failures, K = 3, epsilon = 0.1 and 30 rounds for the full sweep. Base training uses 20 rounds.
+- Effective profile delays are 3–5 s for Medium, 8–12 s for Slow and 3–5 s for High-latency; these override the smaller Python profile defaults.
+- Time to target in the analysis is the earliest recorded round at or above target that stays at or above it through the final round. Target misses are missing values, and averages include only successful runs; report the success count alongside them.
+- Whole-run client coverage includes warm-up and therefore cannot establish continued exploration. Validate post-warm-up selection separately, as the dashboard does. Epsilon exploration offers a probability of participation, not a finite-run guarantee.
+- The dashboard supports result inspection, SCP synchronization and SSH-based sweep control. It also supports a two-instance arrangement: clients on one EC2 instance, server on another. Deployment execution is not established by the presence of these controls.
+- No result logs or generated metric tables are present in this checkout. The 30% speedup, 97% target accuracy and one-percentage-point accuracy tolerance remain acceptance targets, not measured outcomes.
+- For final acceptance, archive effective configs, environment versions, deployment details, all 24 complete logs, per-seed metrics and plots. Validate dependency installation and Flower compatibility before launching the sweep.
